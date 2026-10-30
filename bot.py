@@ -27,7 +27,7 @@ def keep_alive():
 
 # --- ٢. ڕێکخستنی بۆت و لۆگ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-TOKEN = os.environ.get('9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY')
+TOKEN = '9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY'
 bot = telebot.TeleBot(TOKEN, num_threads=4)
 
 # دروستکردنی لۆپێکی تایبەت بۆ کارە ئەسینکەکانی شەزام تا بۆتەکە بلۆک نەبێت
