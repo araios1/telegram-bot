@@ -1,8 +1,6 @@
 import os
 import re
-import requests
 import telebot
-from telebot.types import InputMediaPhoto
 import time
 import logging
 import uuid
@@ -10,6 +8,7 @@ import asyncio
 from shazamio import Shazam
 from flask import Flask, jsonify
 from threading import Thread
+import yt_dlp
 
 # --- ١. ڕێکخستنی سێرڤەر ---
 app = Flask(__name__)
@@ -27,9 +26,9 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- ٢. ڕێکخستنی بۆت و لۆگ ---
+# --- ٢. ڕێکخستنی بۆت ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-TOKEN = '9140242629:AAFDPeVLq0OtEivaT2O9nPdxNl7pA-x8oSU'  # لێرە تۆکێنە نوێیەکەت دابنێ
+TOKEN = '9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY'  # لێرە تۆکێنە نوێیەکەت دابنێ
 bot = telebot.TeleBot(TOKEN, num_threads=4)
 
 shazam_loop = asyncio.new_event_loop()
@@ -65,60 +64,57 @@ def extract_tiktok_url(text):
     match = re.search(r'(https?://[^\s]+)', text)
     return match.group(0).strip() if match else None
 
-# --- ٤. فانکشنی داگرتن لە تیکتۆک ---
-def download_tiktok(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-        "Accept": "application/json, text/plain, */*"
+# --- ٤. داگرتن بە شێوازی فەرمی yt-dlp ---
+def download_media_ytdlp(url, output_prefix):
+    video_path = f"{output_prefix}.mp4"
+    audio_path = f"{output_prefix}.mp3"
+    
+    ydl_opts = {
+        'outtmpl': f"{output_prefix}.%(ext)s",
+        'format': 'best',
+        'quiet': True,
+        'no_warnings': True,
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
     }
 
-    # هەوڵی یەکەم: TikWM لە ڕێگەی داواکاریی خێرای GET
     try:
-        api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
-        res = requests.get(api_url, headers=headers, timeout=12)
-        if res.status_code == 200 and res.text:
-            data_json = res.json()
-            if data_json.get("code") == 0:
-                data = data_json.get("data", {})
-                is_photo = "images" in data and len(data["images"]) > 0
-                audio_link = data.get("music")
-                info = {
-                    "author": data.get("author", {}).get("nickname", "تیکتۆک"),
-                    "likes": data.get("digg_count", 0),
-                    "views": data.get("play_count", 0),
-                    "is_photo": is_photo
-                }
-                media = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play") or data.get("wmplay"))
-                if media:
-                    return media, audio_link, info
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            author = info.get('uploader') or info.get('creator') or 'تیکتۆک'
+            likes = info.get('like_count', 0)
+            views = info.get('view_count', 0)
+            
+            # دەرهێنانی دەنگ بۆ پشکنینی شەزام
+            audio_opts = {
+                'outtmpl': audio_path,
+                'format': 'bestaudio/best',
+                'quiet': True,
+                'no_warnings': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            }
+            try:
+                with yt_dlp.YoutubeDL(audio_opts) as ydl_audio:
+                    ydl_audio.download([url])
+            except Exception:
+                pass
+
+            actual_video = None
+            for ext in ['mp4', 'mkv', 'webm']:
+                cand = f"{output_prefix}.{ext}"
+                if os.path.exists(cand):
+                    actual_video = cand
+                    break
+
+            return actual_video, (audio_path if os.path.exists(audio_path) else None), author, likes, views
     except Exception as e:
-        logging.error(f"TikWM GET failed: {e}")
+        logging.error(f"yt-dlp error: {e}")
+        return None, None, None, 0, 0
 
-    # هەوڵی دووەم: داگرتن لە ڕێگەی TikWM بە شێوازی f-stringی راستەوخۆ لەگەڵ کورتکراوەکان
-    try:
-        api_url = "https://www.tikwm.com/api/"
-        res = requests.post(api_url, headers=headers, data={"url": url}, timeout=12)
-        if res.status_code == 200 and res.text:
-            data_json = res.json()
-            if data_json.get("code") == 0:
-                data = data_json.get("data", {})
-                is_photo = "images" in data and len(data["images"]) > 0
-                audio_link = data.get("music")
-                info = {
-                    "author": data.get("author", {}).get("nickname", "تیکتۆک"),
-                    "likes": data.get("digg_count", 0),
-                    "views": data.get("play_count", 0),
-                    "is_photo": is_photo
-                }
-                media = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play"))
-                if media:
-                    return media, audio_link, info
-    except Exception as e:
-        logging.error(f"TikWM POST failed: {e}")
-
-    return None, None, None
-
-# --- ٥. بەڕێوەبردنی پەیامەکان ---
+# --- ٥. فەرمان و پەیامەکان ---
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, "👋🏼 من دەتوانم ڤیدیۆ و وێنەی (تیکتۆک) دابەزێنم.\n🎵 ناوی گۆرانییەکە لە سەرەتاوە تا کۆتایی پۆستەکە دەپشکێنم و دەنگی سەر پۆستەکەت بۆ دەنێرمەوە.\n\n🔗 تەنیا لینکی تیکتۆک بنێرە📥:")
@@ -132,78 +128,50 @@ def process_request(message):
 
     if raw_url and "tiktok.com" in raw_url:
         wait_msg = bot.reply_to(message, "⏳ چاوەڕێ بکە خەریکم پۆستەکە دادەبەزێنم...")
-        media_data, audio_url, info = download_tiktok(raw_url)
+        file_prefix = f"media_{uuid.uuid4()}"
+        video_file, audio_file, author, likes, views = download_media_ytdlp(raw_url, file_prefix)
 
-        if media_data:
-            caption = f"👤 ناوی ئەکاونت: {info['author']}\n❤️ ڕێژەی ڵایک: {info['likes']} | 👀 ڕێژەی بینین: {info['views']}\n\n⚙️ دروستکەری بۆت Ara"
-            temp_video = None
-            temp_audio = None
+        if video_file and os.path.exists(video_file):
+            caption = f"👤 ناوی ئەکاونت: {author}\n❤️ ڕێژەی ڵایک: {likes} | 👀 ڕێژەی بینین: {views}\n\n⚙️ دروستکەری بۆت Ara"
             try:
-                # ناردنی وێنە یان ڤیدیۆ
-                if info["is_photo"]:
-                    images = media_data
-                    for i in range(0, len(images), 10):
-                        chunk = images[i:i+10]
-                        media_group = [InputMediaPhoto(chunk[0], caption=caption if i==0 else "")] + [InputMediaPhoto(img) for img in chunk[1:]]
-                        bot.send_media_group(message.chat.id, media_group, timeout=120)
-                else:
-                    temp_video = f"video_{uuid.uuid4()}.mp4"
-                    with requests.get(media_data, stream=True, timeout=30) as r:
-                        r.raise_for_status()
-                        with open(temp_video, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=16384):
-                                f.write(chunk)
-                    
-                    with open(temp_video, 'rb') as vf:
-                        bot.send_video(message.chat.id, vf, caption=caption, timeout=180)
+                with open(video_file, 'rb') as vf:
+                    bot.send_video(message.chat.id, vf, caption=caption, timeout=180)
 
-                bot.edit_message_text("🔍 خەریکی پشکنینی پۆستەکەم بۆ دۆزینەوەی ناوی گۆرانی...", message.chat.id, wait_msg.message_id)
+                bot.edit_message_text("🔍 خەریکی پشکنینی ناوی گۆرانییەکەم...", message.chat.id, wait_msg.message_id)
 
                 song_name = None
+                target_audio = audio_file if (audio_file and os.path.exists(audio_file)) else video_file
+                if target_audio:
+                    song_name = recognize_song(target_audio)
 
-                # داگرتنی فایلی دەنگ و ناسینەوە
-                if audio_url:
-                    temp_audio = f"audio_{uuid.uuid4()}.mp3"
-                    with requests.get(audio_url, stream=True, timeout=30) as r:
-                        r.raise_for_status()
-                        with open(temp_audio, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-
-                    song_name = recognize_song(temp_audio)
-
-                # ناردنەوەی دەنگ
-                if temp_audio and os.path.exists(temp_audio):
-                    if song_name:
-                        audio_caption = f"🎶 ناوی گۆرانی: {song_name}\n🔊 دەنگی سەر پۆستەکە"
-                    else:
-                        audio_caption = "🔊 دەنگی سەر پۆستەکە\n(ناوی گۆرانییەکە نەدۆزرایەوە)"
-
-                    with open(temp_audio, 'rb') as audio_file:
-                        bot.send_audio(message.chat.id, audio_file, caption=audio_caption, timeout=120)
+                if audio_file and os.path.exists(audio_file):
+                    audio_caption = f"🎶 ناوی گۆرانی: {song_name}\n🔊 دەنگی سەر پۆستەکە" if song_name else "🔊 دەنگی سەر پۆستەکە"
+                    with open(audio_file, 'rb') as af:
+                        bot.send_audio(message.chat.id, af, caption=audio_caption, timeout=120)
 
                 bot.delete_message(message.chat.id, wait_msg.message_id)
             except Exception as e:
-                logging.error(f"Error in sending media: {e}")
+                logging.error(f"Telegram send error: {e}")
                 bot.edit_message_text("❌ کێشەیەک ڕوویدا لە کاتی ناردنی فایلەکە.", message.chat.id, wait_msg.message_id)
             finally:
-                if temp_video and os.path.exists(temp_video):
-                    os.remove(temp_video)
-                if temp_audio and os.path.exists(temp_audio):
-                    os.remove(temp_audio)
+                for f in [video_file, audio_file, f"{file_prefix}.mp4", f"{file_prefix}.mp3"]:
+                    if f and os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
         else:
             bot.edit_message_text("❌ نەمتوانی پۆستەکە دابگرم، تکایە دڵنیابە لە بەردەستبوونی پۆستەکە.", message.chat.id, wait_msg.message_id)
     else:
         bot.reply_to(message, "❌ تکایە تەنیا لینکی دروستی تیکتۆک بنێرە.")
 
-# --- ٦. دەستپێکردن ---
 if __name__ == '__main__':
     keep_alive()
     try:
         bot.delete_webhook()
     except Exception:
         pass
-    print("🤖 بۆتەکە بە سەرکەوتوویی کەوتە کار...")
+    print("🤖 بۆتەکە دەستی بە کار کرد...")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
