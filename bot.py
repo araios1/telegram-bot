@@ -67,17 +67,52 @@ def extract_tiktok_url(text):
     return match.group(0) if match else None
 
 # --- ٤. داگرتنی تیکتۆک بە دوو سیستەمی جیاواز بۆ دڵنیایی ---
+def unshorten_tiktok(url):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15"
+        }
+        # وەرگرتنی ناونیشانی ئەسڵی لە ڕێگەی هێدەری Location بەبێ بلۆکبوون
+        res = requests.get(url, headers=headers, allow_redirects=False, timeout=10)
+        if 'Location' in res.headers:
+            return res.headers['Location'].split('?')[0]
+        
+        res2 = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+        return res2.url.split('?')[0]
+    except Exception as e:
+        logging.error(f"Unshorten error: {e}")
+        return url
+
 def download_tiktok(url):
+    clean_url = unshorten_tiktok(url)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
-    # هەوڵی یەکەم: TikWM ڕاستەوخۆ بەبێ دەستکاریکردنی بەستەر
+    # هەوڵی یەکەم: TikWM بە لینکی دەرهێنراوی تەواو
     try:
-        api_url = "https://www.tikwm.com/api/"
-        payload = {"url": url, "hd": 1}
-        res = requests.post(api_url, headers=headers, data=payload, timeout=15).json()
+        api_url = f"https://www.tikwm.com/api/?url={clean_url}&hd=1"
+        res = requests.get(api_url, headers=headers, timeout=15).json()
+        if res.get("code") == 0:
+            data = res.get("data", {})
+            is_photo = "images" in data and len(data["images"]) > 0
+            audio_link = data.get("music")
+            info = {
+                "author": data.get("author", {}).get("nickname", "بەکارهێنەری تیکتۆک"),
+                "likes": data.get("digg_count", 0),
+                "views": data.get("play_count", 0),
+                "is_photo": is_photo
+            }
+            media_links = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play") or data.get("wmplay"))
+            if media_links:
+                return media_links, audio_link, info
+    except Exception as e:
+        logging.error(f"TikWM GET failed: {e}")
 
+    # هەوڵی دووەم: TikWM بە بەستەری سەرەتایی بە POST
+    try:
+        payload = {"url": url, "hd": 1}
+        res = requests.post("https://www.tikwm.com/api/", headers=headers, data=payload, timeout=15).json()
         if res.get("code") == 0:
             data = res.get("data", {})
             is_photo = "images" in data and len(data["images"]) > 0
@@ -89,15 +124,14 @@ def download_tiktok(url):
                 "is_photo": is_photo
             }
             media_links = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play"))
-            return media_links, audio_link, info
-        else:
-            logging.error(f"TikWM Error: {res.get('msg')}")
+            if media_links:
+                return media_links, audio_link, info
     except Exception as e:
-        logging.error(f"TikWM Exception: {e}")
+        logging.error(f"TikWM POST failed: {e}")
 
-    # هەوڵی دووەم: APIی جێگرەوە لە حاڵەتی ڕاگرتنی یەکەم
+    # هەوڵی سێیەم: سێرڤەری Tiklydown وەک یەدەگ
     try:
-        backup_api = f"https://api.tiklydown.eu.org/api/download?url={url}"
+        backup_api = f"https://api.tiklydown.eu.org/api/download?url={clean_url}"
         b_res = requests.get(backup_api, headers=headers, timeout=15).json()
         if "video" in b_res or "images" in b_res:
             images = [img.get("url") for img in b_res.get("images", []) if img.get("url")]
@@ -110,16 +144,17 @@ def download_tiktok(url):
                 "is_photo": is_photo
             }
             media_links = images if is_photo else (b_res.get("video", {}).get("noWatermark") or b_res.get("video", {}).get("watermark"))
-            return media_links, audio_link, info
+            if media_links:
+                return media_links, audio_link, info
     except Exception as e:
-        logging.error(f"Backup API Exception: {e}")
+        logging.error(f"Backup API failed: {e}")
 
     return None, None, None
 
 # --- ٥. بەڕێوەبردنی پەیامەکان ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "👋🏼 من دەتوانم ڤیدیۆ و وێنەی (تیکتۆک) دابەزێنم.\n🎵 ناوی گۆرانییەکە لە سەرەتاوە تا کۆتایی پۆستەکە دەپشکێنم و دەنگی سەر پۆستەکەت بۆ دەنێرمەوە.\n\n🔗 تەنیا لینکی تیکتۆک بنێرە📥:")
+    bot.reply_to(message, "👋🏼 من دەتوانم ڤیدیۆ و وێنەی (تیکتۆک) دابەزێنم.\n🎵 ناوی گۆرانییەکە لە سەرەتاوە تا کۆتایی پۆستەکە دەپشکنم و دەنگی سەر پۆستەکەت بۆ دەنێرمەوە.\n\n🔗 تەنیا لینکی تیکتۆک بنێرە📥:")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_links(message):
