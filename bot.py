@@ -11,7 +11,7 @@ from shazamio import Shazam
 from flask import Flask, jsonify
 from threading import Thread
 
-# --- ١. ڕێکخستنی سێرڤەر (بۆ ئەوەی Koyeb هەمیشە بە Healthy بمێنێتەوە) ---
+# --- ١. ڕێکخستنی سێرڤەر (بۆ ئەوەی هۆستەکە دانەخرێت) ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,10 +29,9 @@ def keep_alive():
 
 # --- ٢. ڕێکخستنی بۆت و لۆگ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-TOKEN = '9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY'  # لێرە تۆکێنەکەت بە تەواوی دابنێ
+TOKEN = '9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY'  # لێرە تۆکێنە تەواوەکەت دابنێ
 bot = telebot.TeleBot(TOKEN, num_threads=4)
 
-# دروستکردنی لۆپێکی تایبەت بۆ Shazam
 shazam_loop = asyncio.new_event_loop()
 def start_shazam_loop(loop):
     asyncio.set_event_loop(loop)
@@ -40,7 +39,7 @@ def start_shazam_loop(loop):
 
 Thread(target=start_shazam_loop, args=(shazam_loop,), daemon=True).start()
 
-# --- ٣. ناسینەوەی گۆرانی بە Shazam ---
+# --- ٣. ناسینەوەی گۆرانی بە شەزام ---
 async def _recognize_song_async(filepath):
     try:
         shazam = Shazam()
@@ -57,75 +56,67 @@ async def _recognize_song_async(filepath):
 def recognize_song(filepath):
     future = asyncio.run_coroutine_threadsafe(_recognize_song_async(filepath), shazam_loop)
     try:
-        return future.result(timeout=40)
+        return future.result(timeout=35)
     except Exception as e:
         logging.error(f"Shazam Timeout/Error: {e}")
         return None
 
-# دەرهێنانی لینکی پاکی تیکتۆک
 def extract_tiktok_url(text):
     pattern = r'(https?://[^\s]+)'
     match = re.search(pattern, text)
     return match.group(0) if match else None
 
-# دۆزینەوەی لینکی بنەڕەتیی vt.tiktok.com
-def resolve_redirect(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"}
-        res = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
-        return res.url
-    except Exception:
-        return url
-
-# --- ٤. فانکشنی داگرتنی تیکتۆک ---
+# --- ٤. داگرتنی تیکتۆک بە دوو سیستەمی جیاواز بۆ دڵنیایی ---
 def download_tiktok(url):
-    clean_url = resolve_redirect(url)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
-    
-    # هەوڵی یەکەم: TikWM
+
+    # هەوڵی یەکەم: TikWM ڕاستەوخۆ بەبێ دەستکاریکردنی بەستەر
     try:
-        api_url = f"https://www.tikwm.com/api/?url={clean_url}"
-        response = requests.get(api_url, headers=headers, timeout=15).json()
-        if response.get("code") == 0:
-            data = response.get("data", {})
+        api_url = "https://www.tikwm.com/api/"
+        payload = {"url": url, "hd": 1}
+        res = requests.post(api_url, headers=headers, data=payload, timeout=15).json()
+
+        if res.get("code") == 0:
+            data = res.get("data", {})
             is_photo = "images" in data and len(data["images"]) > 0
             audio_link = data.get("music")
             info = {
-                "author": data.get("author", {}).get("nickname", "تیکتۆک"),
+                "author": data.get("author", {}).get("nickname", "بەکارهێنەری تیکتۆک"),
                 "likes": data.get("digg_count", 0),
                 "views": data.get("play_count", 0),
                 "is_photo": is_photo
             }
-            media_links = data.get("images", []) if is_photo else (data.get("play") or data.get("hdplay"))
+            media_links = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play"))
             return media_links, audio_link, info
+        else:
+            logging.error(f"TikWM Error: {res.get('msg')}")
     except Exception as e:
-        logging.error(f"TikWM failed: {e}")
+        logging.error(f"TikWM Exception: {e}")
 
-    # هەوڵی دووەم: APIی جێگرەوە (TikMate / SSSTik) لە ئەگەری بلۆکبوون
+    # هەوڵی دووەم: APIی جێگرەوە لە حاڵەتی ڕاگرتنی یەکەم
     try:
-        fallback_api = f"https://api.douyin.wtf/api?url={clean_url}"
-        fb_res = requests.get(fallback_api, headers=headers, timeout=15).json()
-        if fb_res.get("status") == "success":
-            data = fb_res.get("data", {})
-            is_photo = "images" in data and len(data["images"]) > 0
-            audio_link = data.get("music", {}).get("play_url", {}).get("uri")
+        backup_api = f"https://api.tiklydown.eu.org/api/download?url={url}"
+        b_res = requests.get(backup_api, headers=headers, timeout=15).json()
+        if "video" in b_res or "images" in b_res:
+            images = [img.get("url") for img in b_res.get("images", []) if img.get("url")]
+            is_photo = len(images) > 0
+            audio_link = b_res.get("music", {}).get("play_url")
             info = {
-                "author": data.get("author", {}).get("nickname", "تیکتۆک"),
-                "likes": data.get("statistics", {}).get("digg_count", 0),
-                "views": data.get("statistics", {}).get("play_count", 0),
+                "author": b_res.get("author", {}).get("nickname", "بەکارهێنەری تیکتۆک"),
+                "likes": b_res.get("stats", {}).get("likeCount", 0),
+                "views": b_res.get("stats", {}).get("playCount", 0),
                 "is_photo": is_photo
             }
-            media_links = data.get("images", []) if is_photo else data.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
-            if media_links:
-                return media_links, audio_link, info
+            media_links = images if is_photo else (b_res.get("video", {}).get("noWatermark") or b_res.get("video", {}).get("watermark"))
+            return media_links, audio_link, info
     except Exception as e:
-        logging.error(f"Fallback API failed: {e}")
+        logging.error(f"Backup API Exception: {e}")
 
     return None, None, None
 
-# --- ٥. فەرمانەکانی بۆت ---
+# --- ٥. بەڕێوەبردنی پەیامەکان ---
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, "👋🏼 من دەتوانم ڤیدیۆ و وێنەی (تیکتۆک) دابەزێنم.\n🎵 ناوی گۆرانییەکە لە سەرەتاوە تا کۆتایی پۆستەکە دەپشکێنم و دەنگی سەر پۆستەکەت بۆ دەنێرمەوە.\n\n🔗 تەنیا لینکی تیکتۆک بنێرە📥:")
@@ -146,7 +137,7 @@ def process_request(message):
             temp_video = None
             temp_audio = None
             try:
-                # ١. ناردنی وێنە یان ڤیدیۆ
+                # ناردنی وێنە یان ڤیدیۆ
                 if info["is_photo"]:
                     images = media_data
                     for i in range(0, len(images), 10):
@@ -154,7 +145,6 @@ def process_request(message):
                         media_group = [InputMediaPhoto(chunk[0], caption=caption if i==0 else "")] + [InputMediaPhoto(img) for img in chunk[1:]]
                         bot.send_media_group(message.chat.id, media_group, timeout=120)
                 else:
-                    # داگرتنی ڤیدیۆ لە کۆیب و ناردنی وەک فایل تا کێشەی تێلیگرام دروست نەبێت
                     temp_video = f"video_{uuid.uuid4()}.mp4"
                     with requests.get(media_data, stream=True, timeout=30) as r:
                         r.raise_for_status()
@@ -165,11 +155,11 @@ def process_request(message):
                     with open(temp_video, 'rb') as vf:
                         bot.send_video(message.chat.id, vf, caption=caption, timeout=180)
 
-                bot.edit_message_text("🔍 خەریکی پشکنینی تەواوی پۆستەکەم بۆ دۆزینەوەی ناوی گۆرانی (چاوەڕێ بە)...", message.chat.id, wait_msg.message_id)
+                bot.edit_message_text("🔍 خەریکی پشکنینی پۆستەکەم بۆ دۆزینەوەی ناوی گۆرانی...", message.chat.id, wait_msg.message_id)
 
                 song_name = None
 
-                # ٢. داگرتنی دەنگ و پشکنین بە Shazam
+                # داگرتنی دەنگ و پشکنین
                 if audio_url:
                     temp_audio = f"audio_{uuid.uuid4()}.mp3"
                     with requests.get(audio_url, stream=True, timeout=30) as r:
@@ -180,7 +170,7 @@ def process_request(message):
 
                     song_name = recognize_song(temp_audio)
 
-                # ٣. ناردنەوەی فایلی دەنگ
+                # ناردنی دەنگ
                 if temp_audio and os.path.exists(temp_audio):
                     if song_name:
                         audio_caption = f"🎶 ناوی گۆرانی: {song_name}\n🔊 دەنگی سەر پۆستەکە"
@@ -192,7 +182,7 @@ def process_request(message):
 
                 bot.delete_message(message.chat.id, wait_msg.message_id)
             except Exception as e:
-                logging.error(f"Error in TikTok flow: {e}")
+                logging.error(f"Error in sending media: {e}")
                 bot.edit_message_text("❌ کێشەیەک ڕوویدا لە کاتی ناردنی فایلەکە.", message.chat.id, wait_msg.message_id)
             finally:
                 if temp_video and os.path.exists(temp_video):
@@ -200,9 +190,9 @@ def process_request(message):
                 if temp_audio and os.path.exists(temp_audio):
                     os.remove(temp_audio)
         else:
-            bot.edit_message_text("❌ نەمتوانی پۆستەکە دابگرم، تکایە دڵنیابە لە دروستیی لینکەکە یان دواتر هەوڵ بدەرەوە.", message.chat.id, wait_msg.message_id)
+            bot.edit_message_text("❌ نەمتوانی پۆستەکە دابگرم، تکایە دڵنیابە لە دروستیی لینکەکە.", message.chat.id, wait_msg.message_id)
     else:
-        bot.reply_to(message, "❌ تکایە تەنیا لینکی دروستی تیکتۆک بنێرە.")
+        bot.reply_to(message, "❌ تکایە تەنیا لینکی تیکتۆک بنێرە.")
 
 # --- ٦. دەستپێکردن ---
 if __name__ == '__main__':
