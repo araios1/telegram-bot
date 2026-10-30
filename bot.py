@@ -29,7 +29,7 @@ def keep_alive():
 
 # --- ٢. ڕێکخستنی بۆت و لۆگ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-TOKEN = '9140242629:AAE9V3AHtx8In5HNmHeAq8n8aIqYQUUtigY'  # لێرە تۆکێنە تەواوەکەت دابنێ
+TOKEN = '9140242629:AAFDPeVLq0OtEivaT2O9nPdxNl7pA-x8oSU'  # لێرە تۆکێنە نوێیەکەت دابنێ
 bot = telebot.TeleBot(TOKEN, num_threads=4)
 
 shazam_loop = asyncio.new_event_loop()
@@ -39,7 +39,7 @@ def start_shazam_loop(loop):
 
 Thread(target=start_shazam_loop, args=(shazam_loop,), daemon=True).start()
 
-# --- ٣. ناسینەوەی گۆرانی بە شەزام ---
+# --- ٣. ناسینەوەی دەنگ بە Shazam ---
 async def _recognize_song_async(filepath):
     try:
         shazam = Shazam()
@@ -56,110 +56,65 @@ async def _recognize_song_async(filepath):
 def recognize_song(filepath):
     future = asyncio.run_coroutine_threadsafe(_recognize_song_async(filepath), shazam_loop)
     try:
-        return future.result(timeout=30)
+        return future.result(timeout=25)
     except Exception as e:
-        logging.error(f"Shazam Timeout/Error: {e}")
+        logging.error(f"Shazam Timeout: {e}")
         return None
 
 def extract_tiktok_url(text):
     match = re.search(r'(https?://[^\s]+)', text)
     return match.group(0).strip() if match else None
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-}
-
-# --- ٤. سێ سیستەمی داگرتن بەیەکەوە (بۆ ئەوەی هەرگیز تووشی هەڵە نەبێت) ---
-def try_lovetik(url):
-    try:
-        headers = {
-            "User-Agent": HEADERS["User-Agent"],
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Referer": "https://lovetik.com/"
-        }
-        res = requests.post("https://lovetik.com/api/ajax/search", headers=headers, data={"query": url}, timeout=15).json()
-        if res.get("status") == "ok":
-            images = res.get("images", [])
-            is_photo = len(images) > 0
-            video_link = None
-            audio_link = None
-            for item in res.get("links", []):
-                t = str(item.get("t", "")).lower()
-                if "mp3" in t or "audio" in t:
-                    audio_link = item.get("a")
-                elif "mp4" in t or "no watermark" in t or "watermark" in t:
-                    if not video_link:
-                        video_link = item.get("a")
-            info = {
-                "author": res.get("author", "تیکتۆک"),
-                "likes": 0,
-                "views": 0,
-                "is_photo": is_photo
-            }
-            media = images if is_photo else video_link
-            if media:
-                return media, audio_link, info
-    except Exception as e:
-        logging.error(f"Lovetik error: {e}")
-    return None, None, None
-
-def try_tikwm(url):
-    try:
-        headers = {
-            "User-Agent": HEADERS["User-Agent"],
-            "Referer": "https://www.tikwm.com/"
-        }
-        res = requests.post("https://www.tikwm.com/api/", headers=headers, data={"url": url, "hd": 1}, timeout=15).json()
-        if res.get("code") == 0:
-            data = res.get("data", {})
-            is_photo = "images" in data and len(data["images"]) > 0
-            audio_link = data.get("music")
-            info = {
-                "author": data.get("author", {}).get("nickname", "تیکتۆک"),
-                "likes": data.get("digg_count", 0),
-                "views": data.get("play_count", 0),
-                "is_photo": is_photo
-            }
-            media = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play") or data.get("wmplay"))
-            if media:
-                return media, audio_link, info
-    except Exception as e:
-        logging.error(f"TikWM error: {e}")
-    return None, None, None
-
-def try_tiklydown(url):
-    try:
-        res = requests.get(f"https://api.tiklydown.eu.org/api/download?url={url}", headers=HEADERS, timeout=15).json()
-        if "video" in res or "images" in res:
-            images = [img.get("url") for img in res.get("images", []) if img.get("url")]
-            is_photo = len(images) > 0
-            audio_link = res.get("music", {}).get("play_url")
-            info = {
-                "author": res.get("author", {}).get("nickname", "تیکتۆک"),
-                "likes": res.get("stats", {}).get("likeCount", 0),
-                "views": res.get("stats", {}).get("playCount", 0),
-                "is_photo": is_photo
-            }
-            media = images if is_photo else (res.get("video", {}).get("noWatermark") or res.get("video", {}).get("watermark"))
-            if media:
-                return media, audio_link, info
-    except Exception as e:
-        logging.error(f"Tiklydown error: {e}")
-    return None, None, None
-
+# --- ٤. فانکشنی داگرتن لە تیکتۆک ---
 def download_tiktok(url):
-    # پشکنینی ڕاستەوخۆ بە یەک لە دوای یەک
-    media, audio, info = try_lovetik(url)
-    if media:
-        return media, audio, info
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept": "application/json, text/plain, */*"
+    }
 
-    media, audio, info = try_tikwm(url)
-    if media:
-        return media, audio, info
+    # هەوڵی یەکەم: TikWM لە ڕێگەی داواکاریی خێرای GET
+    try:
+        api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
+        res = requests.get(api_url, headers=headers, timeout=12)
+        if res.status_code == 200 and res.text:
+            data_json = res.json()
+            if data_json.get("code") == 0:
+                data = data_json.get("data", {})
+                is_photo = "images" in data and len(data["images"]) > 0
+                audio_link = data.get("music")
+                info = {
+                    "author": data.get("author", {}).get("nickname", "تیکتۆک"),
+                    "likes": data.get("digg_count", 0),
+                    "views": data.get("play_count", 0),
+                    "is_photo": is_photo
+                }
+                media = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play") or data.get("wmplay"))
+                if media:
+                    return media, audio_link, info
+    except Exception as e:
+        logging.error(f"TikWM GET failed: {e}")
 
-    media, audio, info = try_tiklydown(url)
-    if media:
-        return media, audio, info
+    # هەوڵی دووەم: داگرتن لە ڕێگەی TikWM بە شێوازی f-stringی راستەوخۆ لەگەڵ کورتکراوەکان
+    try:
+        api_url = "https://www.tikwm.com/api/"
+        res = requests.post(api_url, headers=headers, data={"url": url}, timeout=12)
+        if res.status_code == 200 and res.text:
+            data_json = res.json()
+            if data_json.get("code") == 0:
+                data = data_json.get("data", {})
+                is_photo = "images" in data and len(data["images"]) > 0
+                audio_link = data.get("music")
+                info = {
+                    "author": data.get("author", {}).get("nickname", "تیکتۆک"),
+                    "likes": data.get("digg_count", 0),
+                    "views": data.get("play_count", 0),
+                    "is_photo": is_photo
+                }
+                media = data.get("images", []) if is_photo else (data.get("hdplay") or data.get("play"))
+                if media:
+                    return media, audio_link, info
+    except Exception as e:
+        logging.error(f"TikWM POST failed: {e}")
 
     return None, None, None
 
@@ -184,7 +139,7 @@ def process_request(message):
             temp_video = None
             temp_audio = None
             try:
-                # ١. ناردنی وێنە یان ڤیدیۆ
+                # ناردنی وێنە یان ڤیدیۆ
                 if info["is_photo"]:
                     images = media_data
                     for i in range(0, len(images), 10):
@@ -193,7 +148,7 @@ def process_request(message):
                         bot.send_media_group(message.chat.id, media_group, timeout=120)
                 else:
                     temp_video = f"video_{uuid.uuid4()}.mp4"
-                    with requests.get(media_data, headers=HEADERS, stream=True, timeout=30) as r:
+                    with requests.get(media_data, stream=True, timeout=30) as r:
                         r.raise_for_status()
                         with open(temp_video, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=16384):
@@ -206,10 +161,10 @@ def process_request(message):
 
                 song_name = None
 
-                # ٢. داگرتنی دەنگ و پشکنین بە Shazam
+                # داگرتنی فایلی دەنگ و ناسینەوە
                 if audio_url:
                     temp_audio = f"audio_{uuid.uuid4()}.mp3"
-                    with requests.get(audio_url, headers=HEADERS, stream=True, timeout=30) as r:
+                    with requests.get(audio_url, stream=True, timeout=30) as r:
                         r.raise_for_status()
                         with open(temp_audio, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
@@ -217,7 +172,7 @@ def process_request(message):
 
                     song_name = recognize_song(temp_audio)
 
-                # ٣. ناردنی فایلی دەنگ
+                # ناردنەوەی دەنگ
                 if temp_audio and os.path.exists(temp_audio):
                     if song_name:
                         audio_caption = f"🎶 ناوی گۆرانی: {song_name}\n🔊 دەنگی سەر پۆستەکە"
@@ -230,7 +185,7 @@ def process_request(message):
                 bot.delete_message(message.chat.id, wait_msg.message_id)
             except Exception as e:
                 logging.error(f"Error in sending media: {e}")
-                bot.edit_message_text("❌ کێشەیەک ڕوویدا لە کاتی ناردنی فایلەکە بۆ تێلیگرام.", message.chat.id, wait_msg.message_id)
+                bot.edit_message_text("❌ کێشەیەک ڕوویدا لە کاتی ناردنی فایلەکە.", message.chat.id, wait_msg.message_id)
             finally:
                 if temp_video and os.path.exists(temp_video):
                     os.remove(temp_video)
