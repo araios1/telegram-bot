@@ -71,22 +71,23 @@ def extract_tiktok_url(text):
 # دۆزینەوەی لینکی بنەڕەتیی vt.tiktok.com
 def resolve_redirect(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        res = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"}
+        res = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
         return res.url
     except Exception:
         return url
 
 # --- ٤. فانکشنی داگرتنی تیکتۆک ---
 def download_tiktok(url):
+    clean_url = resolve_redirect(url)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    
+    # هەوڵی یەکەم: TikWM
     try:
-        clean_url = resolve_redirect(url)
         api_url = f"https://www.tikwm.com/api/?url={clean_url}"
-        response = requests.get(api_url, headers=headers, timeout=20).json()
-
+        response = requests.get(api_url, headers=headers, timeout=15).json()
         if response.get("code") == 0:
             data = response.get("data", {})
             is_photo = "images" in data and len(data["images"]) > 0
@@ -97,17 +98,32 @@ def download_tiktok(url):
                 "views": data.get("play_count", 0),
                 "is_photo": is_photo
             }
-            if is_photo:
-                media_links = data.get("images", [])
-            else:
-                media_links = data.get("play") or data.get("hdplay") or data.get("wmplay")
+            media_links = data.get("images", []) if is_photo else (data.get("play") or data.get("hdplay"))
             return media_links, audio_link, info
-        else:
-            logging.error(f"TikWM API Error Code: {response.get('msg')}")
-        return None, None, None
     except Exception as e:
-        logging.error(f"TikTok Download Error: {e}")
-        return None, None, None
+        logging.error(f"TikWM failed: {e}")
+
+    # هەوڵی دووەم: APIی جێگرەوە (TikMate / SSSTik) لە ئەگەری بلۆکبوون
+    try:
+        fallback_api = f"https://api.douyin.wtf/api?url={clean_url}"
+        fb_res = requests.get(fallback_api, headers=headers, timeout=15).json()
+        if fb_res.get("status") == "success":
+            data = fb_res.get("data", {})
+            is_photo = "images" in data and len(data["images"]) > 0
+            audio_link = data.get("music", {}).get("play_url", {}).get("uri")
+            info = {
+                "author": data.get("author", {}).get("nickname", "تیکتۆک"),
+                "likes": data.get("statistics", {}).get("digg_count", 0),
+                "views": data.get("statistics", {}).get("play_count", 0),
+                "is_photo": is_photo
+            }
+            media_links = data.get("images", []) if is_photo else data.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
+            if media_links:
+                return media_links, audio_link, info
+    except Exception as e:
+        logging.error(f"Fallback API failed: {e}")
+
+    return None, None, None
 
 # --- ٥. فەرمانەکانی بۆت ---
 @bot.message_handler(commands=['start'])
